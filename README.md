@@ -1,4 +1,4 @@
-# DOVE — Detection Of Visual Entities
+# DOVE — Detecting Ornithology with Video Embeddings
 
 **D**etection **O**f **V**isual **E**ntities is a research pipeline for bird species classification using a multi-modal fusion of motion-trajectory features and appearance (invariant) features.
 
