@@ -61,7 +61,10 @@ class SwinBackboneWithFFA(nn.Module):
                 torch.zeros(B, 384, 14, 14, device=x.device),
                 torch.zeros(B, 768, 7, 7, device=x.device),
             ]
-        return self.backbone(x)
+        # timm Swin-T features_only returns channel-last (B, H, W, C) — permute to (B, C, H, W)
+        maps = self.backbone(x)
+        return [m.permute(0, 3, 1, 2).contiguous() if m.ndim == 4 and m.shape[-1] != m.shape[1] else m
+                for m in maps]
 
 
 if __name__ == "__main__":
