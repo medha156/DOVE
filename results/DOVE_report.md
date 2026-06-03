@@ -1,19 +1,11 @@
 # DOVE — Results Report
 
-_Auto-generated. 24 experiments._
+_Auto-generated. 0 experiments._
 
 ## 1. Experiment Results
 
 | # | Experiment | Test Acc | Top-3 Acc |
 |---|-----------|----------|----------|
-| 17 | `swin_t_none_random_forest` | 0.1468 | 0.0000 |
-| 18 | `swin_t_none_naive_bayes` | 0.1391 | 0.0000 |
-| 19 | `efficientnet_b3_none_random_forest` | 0.1479 | 0.0000 |
-| 20 | `efficientnet_b3_none_naive_bayes` | 0.1380 | 0.0000 |
-| 21 | `mobilenet_none_random_forest` | 0.1281 | 0.0000 |
-| 22 | `mobilenet_none_naive_bayes` | 0.1303 | 0.0000 |
-| 23 | `vgg19_none_random_forest` | 0.1424 | 0.0000 |
-| 24 | `vgg19_none_naive_bayes` | 0.1281 | 0.0000 |
 
 ## 2. Top-10 Configurations
 
