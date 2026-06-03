@@ -247,13 +247,13 @@ def generate_splits(
     return pd.concat([img_df, vid_df], ignore_index=True)
 
 
-def compute_class_weights(df: pd.DataFrame) -> np.ndarray:
+def compute_class_weights(df: pd.DataFrame, n_classes: int = 20) -> np.ndarray:
     """
     Inverse-frequency weights: w_c = N_total / (N_classes * N_c).
-    Returns array of length num_classes.
+    Always returns array of length n_classes (default 20) — species with
+    zero samples get weight 0.0 so WeightedRandomSampler never crashes.
     """
     train_df = df[df["split"] == "train"]
-    n_classes = df["species_id"].nunique()
     n_total = len(train_df)
     weights = np.zeros(n_classes, dtype=np.float32)
     for c in range(n_classes):
