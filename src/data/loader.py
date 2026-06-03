@@ -1,10 +1,16 @@
 """
 DOVE — Dataset and DataLoader utilities.
 
+Data comes from the CHIRP repo (https://github.com/medha156/CHIRP):
+  - iNaturalist images (modality='image'): raw JPEGs, one per observation
+  - VB100 filtered frames (modality='video_frame'): pre-extracted JPEGs that
+    have already passed pixel std>=10 and Laplacian variance>=5 quality gates.
+    Each JPEG is one quality-filtered frame from a VB100 clip.
+
 Classes:
-- ImageLoader   : iNaturalist-style image dataset
-- VideoLoader   : VB100-style video dataset (uniform frame sampling)
-- DOVEDataset   : unified wrapper over both modalities
+- ImageLoader      : iNaturalist-style image dataset
+- VideoFrameLoader : VB100 pre-extracted frame dataset (loads JPEGs)
+- DOVEDataset      : unified wrapper over both modalities
 """
 from __future__ import annotations
 
@@ -35,15 +41,24 @@ except ImportError:
     logger.warning("PIL not available — ImageLoader will return zero tensors")
 
 
+def _load_pil(fpath: str) -> "PILImage.Image":
+    """Load a JPEG/PNG as an RGB PIL image, returning a blank image on failure."""
+    if _PIL_AVAILABLE and Path(fpath).exists():
+        try:
+            return PILImage.open(fpath).convert("RGB")
+        except Exception:
+            pass
+    if _PIL_AVAILABLE:
+        return PILImage.fromarray(np.zeros((224, 224, 3), dtype=np.uint8))
+    return None  # type: ignore
+
+
 class ImageLoader(Dataset):
     """
-    Loads single images from a CSV manifest.
+    Loads iNaturalist images from a CSV manifest (modality='image').
 
-    Parameters
-    ----------
-    csv_path : path to split CSV (columns: filepath, species_id, …)
-    transform : torchvision transform applied to each PIL image
-    root_dir  : optional prefix prepended to each filepath
+    CSV must have columns: filepath, species_id  (CHIRP format also accepted:
+    path, label, species).
     """
 
     def __init__(
@@ -52,10 +67,15 @@ class ImageLoader(Dataset):
         transform: Optional[Callable] = None,
         root_dir: Optional[str | Path] = None,
     ):
-        self.df = pd.read_csv(csv_path)
-        # keep only image rows
-        if "modality" in self.df.columns:
-            self.df = self.df[self.df["modality"] == "image"].reset_index(drop=True)
+        df = pd.read_csv(csv_path)
+        # normalise CHIRP column names
+        if "path" in df.columns and "filepath" not in df.columns:
+            df = df.rename(columns={"path": "filepath"})
+        if "label" in df.columns and "species_id" not in df.columns:
+            df = df.rename(columns={"label": "species_id"})
+        if "modality" in df.columns:
+            df = df[df["modality"] == "image"].reset_index(drop=True)
+        self.df = df
         self.transform = transform
         self.root_dir = Path(root_dir) if root_dir else None
         logger.info("ImageLoader: %d samples", len(self.df))
@@ -68,21 +88,10 @@ class ImageLoader(Dataset):
         fpath = str(row["filepath"])
         if self.root_dir:
             fpath = str(self.root_dir / fpath)
-
         label = int(row["species_id"])
-
-        if _PIL_AVAILABLE and Path(fpath).exists():
-            img = PILImage.open(fpath).convert("RGB")
-        else:
-            img = PILImage.fromarray(np.zeros((224, 224, 3), dtype=np.uint8)) if _PIL_AVAILABLE else None
-
-        if self.transform is not None and img is not None:
-            image_tensor = self.transform(img)
-        elif img is not None:
-            image_tensor = torch.zeros(3, 224, 224)
-        else:
-            image_tensor = torch.zeros(3, 224, 224)
-
+        img = _load_pil(fpath)
+        image_tensor = self.transform(img) if (self.transform and img is not None) \
+            else torch.zeros(3, 224, 224)
         return {
             "image": image_tensor,
             "label": torch.tensor(label, dtype=torch.long),
@@ -91,72 +100,35 @@ class ImageLoader(Dataset):
         }
 
 
-class VideoLoader(Dataset):
+class VideoFrameLoader(Dataset):
     """
-    Loads short video clips and uniformly samples n_frames frames.
+    Loads pre-extracted, quality-filtered VB100 frames (modality='video_frame').
 
-    Parameters
-    ----------
-    csv_path  : path to split CSV
-    n_frames  : number of frames to uniformly sample
-    transform : applied to each frame independently (PIL image → tensor)
-    root_dir  : optional path prefix
+    Each row in the CSV is one JPEG frame that has already passed the CHIRP
+    quality gates (pixel std >= 10, Laplacian variance >= 5).  The loader
+    simply reads the JPEG — no video decoding required.
     """
 
     def __init__(
         self,
         csv_path: str | Path,
-        n_frames: int = 8,
         transform: Optional[Callable] = None,
         root_dir: Optional[str | Path] = None,
     ):
-        self.df = pd.read_csv(csv_path)
-        if "modality" in self.df.columns:
-            self.df = self.df[self.df["modality"] == "video"].reset_index(drop=True)
-        self.n_frames = n_frames
+        df = pd.read_csv(csv_path)
+        if "path" in df.columns and "filepath" not in df.columns:
+            df = df.rename(columns={"path": "filepath"})
+        if "label" in df.columns and "species_id" not in df.columns:
+            df = df.rename(columns={"label": "species_id"})
+        if "modality" in df.columns:
+            df = df[df["modality"] == "video_frame"].reset_index(drop=True)
+        self.df = df
         self.transform = transform
         self.root_dir = Path(root_dir) if root_dir else None
-        logger.info("VideoLoader: %d samples, n_frames=%d", len(self.df), n_frames)
+        logger.info("VideoFrameLoader: %d samples", len(self.df))
 
     def __len__(self) -> int:
         return len(self.df)
-
-    def _load_frames(self, path: str) -> torch.Tensor:
-        """Returns (n_frames, C, H, W) tensor."""
-        if not _CV2_AVAILABLE or not Path(path).exists():
-            return torch.zeros(self.n_frames, 3, 224, 224)
-
-        cap = cv2.VideoCapture(path)
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total <= 0:
-            cap.release()
-            return torch.zeros(self.n_frames, 3, 224, 224)
-
-        indices = np.linspace(0, total - 1, self.n_frames, dtype=int)
-        frames = []
-        for fi in indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(fi))
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                frames.append(np.zeros((224, 224, 3), dtype=np.uint8))
-                continue
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(frame_rgb)
-        cap.release()
-
-        tensors = []
-        for f in frames:
-            if _PIL_AVAILABLE:
-                pil = PILImage.fromarray(f)
-                if self.transform:
-                    t = self.transform(pil)
-                else:
-                    t = torch.from_numpy(f).permute(2, 0, 1).float() / 255.0
-            else:
-                t = torch.from_numpy(f).permute(2, 0, 1).float() / 255.0
-            tensors.append(t)
-
-        return torch.stack(tensors, dim=0)  # (n_frames, C, H, W)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         row = self.df.iloc[idx]
@@ -164,25 +136,30 @@ class VideoLoader(Dataset):
         if self.root_dir:
             fpath = str(self.root_dir / fpath)
         label = int(row["species_id"])
-        frames = self._load_frames(fpath)
+        img = _load_pil(fpath)
+        image_tensor = self.transform(img) if (self.transform and img is not None) \
+            else torch.zeros(3, 224, 224)
         return {
-            "frames": frames,
+            "image": image_tensor,
             "label": torch.tensor(label, dtype=torch.long),
-            "modality": "video",
+            "modality": "video_frame",
             "filepath": fpath,
         }
 
 
+# Keep VideoLoader as a thin alias so existing code doesn't break
+VideoLoader = VideoFrameLoader
+
+
 class DOVEDataset(Dataset):
     """
-    Unified dataset that wraps both ImageLoader and VideoLoader.
+    Unified dataset over iNaturalist images and quality-filtered VB100 frames.
 
-    Each item returns:
+    Both modalities are single JPEGs — no video decoding.  Each item returns:
         {
-          "image"   : (C, H, W) tensor  (zeros if video)
-          "frames"  : (n_frames, C, H, W) tensor  (zeros if image)
+          "image"   : (C, H, W) tensor  — the loaded/transformed JPEG
           "label"   : long scalar
-          "modality": 'image' or 'video'
+          "modality": 'image' or 'video_frame'
           "filepath": str
         }
     """
@@ -190,26 +167,19 @@ class DOVEDataset(Dataset):
     def __init__(
         self,
         csv_path: str | Path,
-        n_frames: int = 8,
         transform: Optional[Callable] = None,
         root_dir: Optional[str | Path] = None,
     ):
-        self.df = pd.read_csv(csv_path)
-        self.n_frames = n_frames
+        df = pd.read_csv(csv_path)
+        # normalise CHIRP column names
+        if "path" in df.columns and "filepath" not in df.columns:
+            df = df.rename(columns={"path": "filepath"})
+        if "label" in df.columns and "species_id" not in df.columns:
+            df = df.rename(columns={"label": "species_id"})
+        self.df = df
         self.transform = transform
         self.root_dir = Path(root_dir) if root_dir else None
         logger.info("DOVEDataset: %d total samples", len(self.df))
-
-        self._img_loader = ImageLoader.__new__(ImageLoader)
-        self._img_loader.df = self.df
-        self._img_loader.transform = transform
-        self._img_loader.root_dir = self.root_dir
-
-        self._vid_loader = VideoLoader.__new__(VideoLoader)
-        self._vid_loader.df = self.df
-        self._vid_loader.n_frames = n_frames
-        self._vid_loader.transform = transform
-        self._vid_loader.root_dir = self.root_dir
 
     def __len__(self) -> int:
         return len(self.df)
@@ -222,24 +192,12 @@ class DOVEDataset(Dataset):
             fpath = str(self.root_dir / fpath)
         label = int(row["species_id"])
 
-        if modality == "image":
-            if _PIL_AVAILABLE and Path(fpath).exists():
-                img = PILImage.open(fpath).convert("RGB")
-            else:
-                img = PILImage.fromarray(np.zeros((224, 224, 3), dtype=np.uint8)) if _PIL_AVAILABLE else None
-
-            if self.transform and img is not None:
-                image_tensor = self.transform(img)
-            else:
-                image_tensor = torch.zeros(3, 224, 224)
-            frames_tensor = torch.zeros(self.n_frames, 3, 224, 224)
-        else:
-            image_tensor = torch.zeros(3, 224, 224)
-            frames_tensor = self._vid_loader._load_frames(fpath)
+        img = _load_pil(fpath)
+        image_tensor = self.transform(img) if (self.transform and img is not None) \
+            else torch.zeros(3, 224, 224)
 
         return {
             "image": image_tensor,
-            "frames": frames_tensor,
             "label": torch.tensor(label, dtype=torch.long),
             "modality": modality,
             "filepath": fpath,
