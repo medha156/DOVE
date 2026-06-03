@@ -1,35 +1,36 @@
 """
 DOVE — Data preparation script.
 
-Pulls cleaned datasets from the CHIRP repo (https://github.com/medha156/CHIRP)
-and generates train/val/test split CSVs for DOVE training.
+Accepts either:
+  A) A pre-built CHIRP merged index  (--merged-index path/to/merged/index.csv)
+  B) Individual CHIRP source indices (--chirp-dir, reads inat + vb100_frames)
+
+The merged index (data/merged/index.csv) is the preferred source — it already
+combines VB100 videos, Birds-525 photos, and iNaturalist photos into one file.
 
 VB100 frames used here have already been quality-filtered in CHIRP by:
   - Pixel std deviation >= 10  (removes blank/near-black frames)
   - Laplacian variance   >= 5  (removes motion-blurred frames)
-
-Usage:
-    python scripts/prepare_data.py [--chirp-dir /path/to/CHIRP] [--clone]
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import random
-import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from data.splits import (
     SPECIES_NAMES,
-    build_manifest_from_chirp,
-    build_manifest,
-    compute_class_weights,
+    SPECIES_TO_ID,
+    SLUG_TO_ID,
     generate_splits,
+    compute_class_weights,
     save_splits,
 )
 
@@ -38,28 +39,64 @@ logger = logging.getLogger("prepare_data")
 
 REPO_ROOT  = Path(__file__).parent.parent
 SPLITS_DIR = REPO_ROOT / "data" / "splits"
-CHIRP_REPO = "https://github.com/medha156/CHIRP.git"
 
 
-def clone_or_pull_chirp(chirp_dir: Path) -> None:
-    if chirp_dir.exists():
-        logger.info("Pulling latest CHIRP at %s", chirp_dir)
-        subprocess.run(["git", "-C", str(chirp_dir), "pull", "--ff-only"], check=True)
-    else:
-        logger.info("Cloning CHIRP into %s", chirp_dir)
-        subprocess.run(["git", "clone", "--depth=1", CHIRP_REPO, str(chirp_dir)], check=True)
+def load_merged_index(merged_csv: Path) -> pd.DataFrame:
+    """
+    Load a CHIRP merged index.csv and normalise to DOVE schema.
+
+    CHIRP columns: path, label, species, source, modality, license, [video_src, frame_idx]
+    DOVE columns:  filepath, species_id, species_name, modality, video_src
+    """
+    df = pd.read_csv(merged_csv)
+    logger.info("Loaded %d rows from %s", len(df), merged_csv)
+
+    # Normalise column names
+    if "path" in df.columns and "filepath" not in df.columns:
+        df = df.rename(columns={"path": "filepath"})
+    if "label" in df.columns and "species_id" not in df.columns:
+        df = df.rename(columns={"label": "species_id"})
+
+    # Normalise modality: CHIRP uses 'photo'/'video'; DOVE uses 'image'/'video_frame'
+    modality_map = {"photo": "image", "video": "video_frame", "image": "image",
+                    "video_frame": "video_frame"}
+    df["modality"] = df["modality"].map(modality_map).fillna("image")
+
+    # Ensure video_src column exists
+    if "video_src" not in df.columns:
+        df["video_src"] = ""
+
+    # Add species_name if missing
+    if "species_name" not in df.columns:
+        if "species" in df.columns:
+            df = df.rename(columns={"species": "species_name"})
+        else:
+            df["species_name"] = df["species_id"].map(
+                {i: n for i, n in enumerate(SPECIES_NAMES)})
+
+    # Ensure species_id is int
+    df["species_id"] = df["species_id"].astype(int)
+
+    # Drop rows with unknown species
+    valid = df["species_id"].between(0, len(SPECIES_NAMES) - 1)
+    if (~valid).sum() > 0:
+        logger.warning("Dropping %d rows with out-of-range species_id", (~valid).sum())
+        df = df[valid].reset_index(drop=True)
+
+    return df[["filepath", "species_id", "species_name", "modality", "video_src"]]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--chirp-dir", type=Path,
-        default=REPO_ROOT.parent / "CHIRP",
-        help="Path to local CHIRP repository",
+        default=None,
+        help="Path to CHIRP repo — uses data/merged/index.csv inside it",
     )
     parser.add_argument(
-        "--clone", action="store_true",
-        help="Clone/pull CHIRP repo before preparing data",
+        "--merged-index", type=Path,
+        default=None,
+        help="Direct path to a CHIRP merged index.csv",
     )
     args = parser.parse_args()
 
@@ -67,64 +104,51 @@ def main() -> None:
     np.random.seed(42)
 
     logger.info("=" * 60)
-    logger.info("DOVE — Data Preparation (CHIRP cleaned datasets)")
+    logger.info("DOVE — Data Preparation")
     logger.info("=" * 60)
 
-    chirp_dir: Path = args.chirp_dir
+    # Resolve merged index path
+    if args.merged_index:
+        merged_csv = args.merged_index
+    elif args.chirp_dir:
+        merged_csv = args.chirp_dir / "data" / "merged" / "index.csv"
+    else:
+        logger.error("Provide --chirp-dir or --merged-index")
+        sys.exit(1)
 
-    if args.clone:
-        clone_or_pull_chirp(chirp_dir)
-
-    if not chirp_dir.exists():
+    if not merged_csv.exists():
+        logger.error("Merged index not found: %s", merged_csv)
         logger.error(
-            "CHIRP directory not found at %s.\n"
-            "Run with --clone to clone automatically, or point --chirp-dir at "
-            "your local copy of https://github.com/medha156/CHIRP",
-            chirp_dir,
+            "Run CHIRP's build_index.py first:\n"
+            "  python experiments/build_index.py \\\n"
+            "    --vb100-extracted data/raw/vb100/extracted \\\n"
+            "    --inat-index data/inaturalist/index.csv \\\n"
+            "    --unified-out data/merged/index.csv"
         )
         sys.exit(1)
 
-    # ── Locate CHIRP index CSVs ───────────────────────────────────────────
-    inat_index  = chirp_dir / "data" / "inaturalist" / "index.csv"
-    vb100_index = chirp_dir / "data" / "processed" / "vb100_frames" / "index.csv"
-
-    for p in (inat_index, vb100_index):
-        if not p.exists():
-            logger.error("Index not found: %s", p)
-            logger.error(
-                "Make sure the CHIRP repo is up to date and the data preparation "
-                "pipeline has been run (see CHIRP/pipelines/filter_vb100_frames.py)."
-            )
-            sys.exit(1)
-
-    logger.info("iNat  index : %s", inat_index)
-    logger.info("VB100 index : %s", vb100_index)
-
-    # ── Build unified manifest ────────────────────────────────────────────
-    logger.info("Building manifest from CHIRP indices…")
-    df = build_manifest_from_chirp(inat_index, vb100_index)
-
-    if len(df) == 0:
-        logger.error("Empty manifest — aborting")
-        sys.exit(1)
+    df = load_merged_index(merged_csv)
 
     logger.info("Total samples : %d", len(df))
     logger.info("Modality breakdown: %s", df["modality"].value_counts().to_dict())
     logger.info("Species breakdown:")
     for sid, sname in enumerate(SPECIES_NAMES):
         n = (df["species_id"] == sid).sum()
-        logger.info("  [%2d] %-32s %d", sid, sname, n)
+        flag = "⚠ MISSING" if n == 0 else ""
+        logger.info("  [%2d] %-32s %4d  %s", sid, sname, n, flag)
 
-    # ── Stratified splits (video-level for VB100) ─────────────────────────
+    missing = [SPECIES_NAMES[i] for i in range(len(SPECIES_NAMES))
+               if (df["species_id"] == i).sum() == 0]
+    if missing:
+        logger.warning("Missing species (%d): %s", len(missing), missing)
+
     logger.info("Generating stratified splits (70 / 15 / 15)…")
     df_split = generate_splits(df, val_frac=0.15, test_frac=0.15, seed=42)
     logger.info("Split sizes: %s", df_split["split"].value_counts().to_dict())
 
-    # ── Class weights ─────────────────────────────────────────────────────
     weights = compute_class_weights(df_split)
     logger.info("Class weights — min=%.4f  max=%.4f", weights.min(), weights.max())
 
-    # ── Save ──────────────────────────────────────────────────────────────
     save_splits(df_split, SPLITS_DIR, weights)
     logger.info("Splits saved to %s", SPLITS_DIR)
     logger.info("Done.")
