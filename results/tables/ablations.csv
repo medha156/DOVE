@@ -1,0 +1,13 @@
+ablation_name,accuracy,model.backbone,model.fusion,model.head,ablate.motion,ablate.invariant
+backbone_vgg19,0.7237993794602593,vgg19,,,,
+backbone_mobilenet,0.5087537643279334,mobilenet,,,,
+backbone_efficientnet,0.5962602614291918,efficientnet_b3,,,,
+backbone_swin_t,0.578123758352088,swin_t,,,,
+fusion_concat,0.7577649249574043,,concat,,,
+fusion_cross_attention,0.7368448205980189,,cross_attention,,,
+head_mlp,0.8122628486966958,,,mlp,,
+head_linear,0.5304285914202956,,,linear,,
+head_rf,0.6476726368898447,,,random_forest,,
+head_nb,0.5104290268033246,,,naive_bayes,,
+no_motion,0.5765232911812612,,,,False,
+no_invariant,0.6768743508361769,,,,,False
