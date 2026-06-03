@@ -79,7 +79,8 @@ def plot_learning_curve(
     df = pd.read_csv(log_csv)
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     axes[0].plot(df["epoch"], df["train_loss"], label="train")
-    axes[0].plot(df["epoch"], df["val_loss"], label="val")
+    if "val_loss" in df.columns:
+        axes[0].plot(df["epoch"], df["val_loss"], label="val")
     axes[0].set_xlabel("Epoch")
     axes[0].set_ylabel("Loss")
     axes[0].set_title("Loss Curve")
