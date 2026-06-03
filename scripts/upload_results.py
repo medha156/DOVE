@@ -1,0 +1,69 @@
+"""
+DOVE — Upload results to git remote.
+
+Stages results/ and configs/, commits with a timestamp tag,
+and pushes to origin/main.
+"""
+from __future__ import annotations
+
+import logging
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
+logger = logging.getLogger("upload_results")
+
+REPO_ROOT = Path(__file__).parent.parent
+
+try:
+    import git
+    _GIT_AVAILABLE = True
+except ImportError:
+    _GIT_AVAILABLE = False
+    logger.error("gitpython not installed — run: pip install gitpython")
+
+
+def main() -> None:
+    if not _GIT_AVAILABLE:
+        sys.exit(1)
+
+    try:
+        repo = git.Repo(REPO_ROOT)
+    except git.InvalidGitRepositoryError:
+        logger.error("Not a git repository: %s", REPO_ROOT)
+        sys.exit(1)
+
+    # Stage results/ and configs/
+    paths_to_add = [
+        str(REPO_ROOT / "results"),
+        str(REPO_ROOT / "configs"),
+    ]
+    logger.info("Staging paths: %s", paths_to_add)
+    repo.index.add(paths_to_add)
+
+    # Commit
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    commit_msg = f"results: auto-upload at {timestamp}"
+    if repo.index.diff("HEAD") or repo.untracked_files:
+        commit = repo.index.commit(commit_msg)
+        logger.info("Committed: %s — %s", commit.hexsha[:8], commit_msg)
+    else:
+        logger.info("Nothing to commit — working tree clean")
+        return
+
+    # Create tag
+    tag_name = f"results-{timestamp}"
+    repo.create_tag(tag_name, message=commit_msg)
+    logger.info("Created tag: %s", tag_name)
+
+    # Push
+    origin = repo.remote("origin")
+    logger.info("Pushing to origin main with tags…")
+    origin.push(refspec="main:main")
+    origin.push(tags=True)
+    logger.info("Push complete.")
+
+
+if __name__ == "__main__":
+    main()

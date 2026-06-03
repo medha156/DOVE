@@ -1,0 +1,44 @@
+# DOVE base hyperparameters
+seed: 42
+num_classes: 20
+input_size: 224
+
+data:
+  train_csv: data/splits/train.csv
+  val_csv: data/splits/val.csv
+  test_csv: data/splits/test.csv
+  num_workers: 4
+
+model:
+  backbone: swin_t
+  fusion: cross_attention
+  head: mlp
+  d_model: 512
+
+training:
+  lr: 1e-4
+  weight_decay: 1e-4
+  dropout: 0.3
+  batch_size: 32
+  n_epochs: 50
+  patience: 5
+  grad_clip: 1.0
+  mixed_precision: true
+
+motion:
+  window_size: 64
+  n_features: 139
+
+invariant:
+  k: 100
+  sim_mode: cosine
+  patch_size: 4
+  n_frames: 8
+
+fdl:
+  tau: 0.1
+  temperature: 4
+  alpha: 0.5
+
+hyperopt:
+  n_trials: 50
