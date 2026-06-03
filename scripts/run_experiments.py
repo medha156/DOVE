@@ -348,11 +348,15 @@ def finalise_report(df: pd.DataFrame) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--experiment", default=None, help="Run single experiment by name")
-    parser.add_argument("--epochs",     type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--smoke-test", action="store_true",
+    parser.add_argument("--experiment",  default=None, help="Run single experiment by name")
+    parser.add_argument("--epochs",      type=int, default=20)
+    parser.add_argument("--batch-size",  type=int, default=32)
+    parser.add_argument("--smoke-test",  action="store_true",
                         help="2-epoch quick sanity check, small dataset subset")
+    parser.add_argument("--neural-only", action="store_true",
+                        help="Run only neural-head experiments (skip random_forest/naive_bayes)")
+    parser.add_argument("--skip-done",   action="store_true",
+                        help="Skip experiments already present in experiment_results.csv")
     args = parser.parse_args()
 
     random.seed(42)
@@ -368,13 +372,27 @@ def main() -> None:
         if not grid:
             logger.error("Experiment '%s' not found in grid.", args.experiment)
             sys.exit(1)
+    if args.neural_only:
+        grid = [e for e in grid if e["head"] not in ("random_forest", "naive_bayes")]
+        logger.info("--neural-only: %d experiments remaining", len(grid))
+
+    # Load existing results so we can skip already-done experiments and merge
+    done_results: list[dict] = []
+    results_csv = RESULTS_DIR / "experiment_results.csv"
+    done_names: set[str] = set()
+    if args.skip_done and results_csv.exists():
+        existing = pd.read_csv(results_csv)
+        done_names = set(existing["name"].dropna())
+        done_results = existing.to_dict("records")
+        logger.info("--skip-done: skipping %d already-completed experiments", len(done_names))
+        grid = [e for e in grid if e["name"] not in done_names]
 
     n_epochs = 2 if args.smoke_test else args.epochs
     batch_size = args.batch_size
 
     train_loader, val_loader, test_loader = make_loaders(batch_size)
 
-    all_results = []
+    all_results = list(done_results)
     init_report(len(grid))
 
     for i, config in enumerate(grid, 1):

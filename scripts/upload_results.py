@@ -57,11 +57,18 @@ def main() -> None:
     repo.create_tag(tag_name, message=commit_msg)
     logger.info("Created tag: %s", tag_name)
 
-    # Push
+    # Push — fall back to subprocess if gitpython auth fails
+    import subprocess, os
     origin = repo.remote("origin")
     logger.info("Pushing to origin main with tags…")
-    origin.push(refspec="main:main")
-    origin.push(tags=True)
+    try:
+        origin.push(refspec="main:main")
+        origin.push(tags=True)
+    except Exception as e:
+        logger.warning("gitpython push failed (%s), retrying with git CLI", e)
+        env = dict(os.environ)
+        subprocess.run(["git", "push", "origin", "main", "--tags"],
+                       cwd=str(REPO_ROOT), check=True, env=env)
     logger.info("Push complete.")
 
 
