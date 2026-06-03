@@ -20,7 +20,7 @@ training:
   weight_decay: 1e-4
   dropout: 0.3
   batch_size: 32
-  n_epochs: 50
+  n_epochs: 20
   patience: 5
   grad_clip: 1.0
   mixed_precision: true
