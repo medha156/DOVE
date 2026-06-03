@@ -382,9 +382,11 @@ def main() -> None:
     done_names: set[str] = set()
     if args.skip_done and results_csv.exists():
         existing = pd.read_csv(results_csv)
-        done_names = set(existing["name"].dropna())
+        # Only skip experiments with valid (non-NaN) test accuracy
+        completed = existing[existing["test_accuracy"].notna()]
+        done_names = set(completed["name"].dropna())
         done_results = existing.to_dict("records")
-        logger.info("--skip-done: skipping %d already-completed experiments", len(done_names))
+        logger.info("--skip-done: skipping %d successfully-completed experiments", len(done_names))
         grid = [e for e in grid if e["name"] not in done_names]
 
     n_epochs = 2 if args.smoke_test else args.epochs
