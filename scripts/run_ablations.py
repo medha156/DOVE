@@ -77,10 +77,12 @@ class _NeuralModel(nn.Module):
                 p.requires_grad_(False)
 
     def forward(self, images):
-        inv_feat    = self.inv_pipeline.extract(images)        # (B,1440)
-        motion_zero = torch.zeros(images.size(0), 139, device=images.device)
+        backbone_feat = self.backbone(images)
+        if backbone_feat.dim() > 2:
+            backbone_feat = backbone_feat.mean(dim=[-2, -1])
+        inv_feat = self.inv_pipeline.extract(images)           # (B,1440)
         if self.fusion is not None:
-            fused = self.fusion(motion_zero, inv_feat)         # (B,512)
+            fused = self.fusion(backbone_feat, inv_feat)       # (B,512)
         else:
             fused = inv_feat[:, :512]
         return self.head(fused)
@@ -102,10 +104,10 @@ def build_model(cfg: Dict[str, Any], device: torch.device) -> nn.Module:
 
     if fu_name == "cross_attention":
         from fusion.cross_attention import CrossAttentionFusion
-        fusion = CrossAttentionFusion().to(device)
+        fusion = CrossAttentionFusion(motion_dim=backbone.feature_dim).to(device)
     else:
         from fusion.concat import ConcatFusion
-        fusion = ConcatFusion().to(device)
+        fusion = ConcatFusion(motion_dim=backbone.feature_dim).to(device)
 
     if hd_name == "mlp":
         from heads.mlp_head import MLPHead

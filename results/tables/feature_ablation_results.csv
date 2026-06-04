@@ -1,0 +1,4 @@
+name,description,use_backbone,use_invariant,val_acc,test_acc,test_top3,delta_vs_both
+backbone_only,EfficientNet-B3 features only (zero invariant),True,False,0.8970427163198248,0.904709748083242,0.9802847754654983,-0.024096385542168752
+invariant_only,Swin-T HSFA invariant features only (zero backbone),False,True,0.9255202628696605,0.9167579408543264,0.9879518072289156,-0.012048192771084376
+both,Both backbone + invariant features (full model),True,True,0.932092004381161,0.9288061336254108,0.9824753559693319,0.0

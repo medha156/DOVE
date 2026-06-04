@@ -34,13 +34,18 @@ def main() -> None:
         logger.error("Not a git repository: %s", REPO_ROOT)
         sys.exit(1)
 
-    # Stage results/ and configs/
-    paths_to_add = [
-        str(REPO_ROOT / "results"),
-        str(REPO_ROOT / "configs"),
-    ]
-    logger.info("Staging paths: %s", paths_to_add)
-    repo.index.add(paths_to_add)
+    # Stage results/ and configs/ excluding .pt/.pth checkpoints
+    logger.info("Staging results/ and configs/ (excluding checkpoints)")
+    for folder in ["results", "configs"]:
+        folder_path = REPO_ROOT / folder
+        if not folder_path.exists():
+            continue
+        for fpath in folder_path.rglob("*"):
+            if fpath.is_file() and fpath.suffix.lower() not in (".pt", ".pth"):
+                try:
+                    repo.index.add([str(fpath)])
+                except Exception as e:
+                    logger.warning("Could not stage %s: %s", fpath, e)
 
     # Commit
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
