@@ -95,9 +95,11 @@ class _NeuralModel(nn.Module):
         self.head         = head
 
     def forward(self, images):
-        inv_feat    = self.inv_pipeline.extract(images)
-        motion_zero = torch.zeros(images.size(0), 139, device=images.device)
-        fused       = self.fusion(motion_zero, inv_feat) if self.fusion else inv_feat[:, :512]
+        backbone_feat = self.backbone(images)
+        if backbone_feat.dim() > 2:
+            backbone_feat = backbone_feat.mean(dim=[-2, -1])
+        inv_feat = self.inv_pipeline.extract(images)
+        fused    = self.fusion(backbone_feat, inv_feat) if self.fusion else inv_feat[:, :512]
         return self.head(fused)
 
 
@@ -111,10 +113,10 @@ def build_model(arch: Dict[str, Any], dropout: float, device: torch.device) -> n
 
     if arch["fusion"] == "cross_attention":
         from fusion.cross_attention import CrossAttentionFusion
-        fusion = CrossAttentionFusion().to(device)
+        fusion = CrossAttentionFusion(motion_dim=backbone.feature_dim).to(device)
     else:
         from fusion.concat import ConcatFusion
-        fusion = ConcatFusion().to(device)
+        fusion = ConcatFusion(motion_dim=backbone.feature_dim).to(device)
 
     if arch["head"] == "mlp":
         from heads.mlp_head import MLPHead
@@ -282,7 +284,7 @@ def plot_hpo_results(all_rows: List[dict]) -> None:
         plt.colorbar(sc, ax=axes[-1], label="Label Smoothing")
         fig.suptitle("HPO: LR vs Val Accuracy (colour=label_smoothing, size=batch_size)", y=1.01)
         plt.tight_layout()
-        fig.savefig(FIGS_DIR / "hpo_scatter.png", dpi=150, bbox_inches="tight")
+        fig.savefig(FIGS_DIR / "hpo_fixed_scatter.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
         logger.info("HPO scatter saved")
 
@@ -302,7 +304,7 @@ def plot_hpo_results(all_rows: List[dict]) -> None:
                      f"lr={row['lr']:.1e}\nbs={int(row['batch_size'])}",
                      ha="center", va="bottom", fontsize=7)
         plt.tight_layout()
-        fig2.savefig(FIGS_DIR / "hpo_best_configs.png", dpi=150)
+        fig2.savefig(FIGS_DIR / "hpo_fixed_best_configs.png", dpi=150)
         plt.close(fig2)
         logger.info("HPO best configs plot saved")
     except Exception as e:
@@ -316,8 +318,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("HPO device: %s", device)
 
-    all_csv  = RESULTS_DIR / "hpo_results.csv"
-    best_csv = RESULTS_DIR / "hpo_best_configs.csv"
+    all_csv  = RESULTS_DIR / "hpo_fixed_results.csv"
+    best_csv = RESULTS_DIR / "hpo_fixed_best_configs.csv"
 
     all_rows  = []
     best_rows = []

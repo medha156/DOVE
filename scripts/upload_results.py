@@ -1,11 +1,12 @@
 """
 DOVE — Upload results to git remote.
 
-Stages results/ and configs/, commits with a timestamp tag,
+Stages results/ (and optionally extra folders), commits with a timestamp tag,
 and pushes to origin/main.
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from datetime import datetime, timezone
@@ -25,6 +26,11 @@ except ImportError:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--extra-folder", action="append", default=[],
+                        dest="extra_folders", help="Additional result folders to stage")
+    args = parser.parse_args()
+
     if not _GIT_AVAILABLE:
         sys.exit(1)
 
@@ -34,9 +40,9 @@ def main() -> None:
         logger.error("Not a git repository: %s", REPO_ROOT)
         sys.exit(1)
 
-    # Stage results/ and configs/ excluding .pt/.pth checkpoints
-    logger.info("Staging results/ and configs/ (excluding checkpoints)")
-    for folder in ["results", "configs"]:
+    folders = ["results", "configs"] + args.extra_folders
+    logger.info("Staging %s (excluding checkpoints)", ", ".join(folders))
+    for folder in folders:
         folder_path = REPO_ROOT / folder
         if not folder_path.exists():
             continue
@@ -47,7 +53,6 @@ def main() -> None:
                 except Exception as e:
                     logger.warning("Could not stage %s: %s", fpath, e)
 
-    # Commit
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     commit_msg = f"results: auto-upload at {timestamp}"
     if repo.index.diff("HEAD") or repo.untracked_files:
@@ -57,12 +62,10 @@ def main() -> None:
         logger.info("Nothing to commit — working tree clean")
         return
 
-    # Create tag
     tag_name = f"results-{timestamp}"
     repo.create_tag(tag_name, message=commit_msg)
     logger.info("Created tag: %s", tag_name)
 
-    # Push — fall back to subprocess if gitpython auth fails
     import subprocess, os
     origin = repo.remote("origin")
     logger.info("Pushing to origin main with tags…")
